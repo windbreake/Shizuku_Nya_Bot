@@ -1,0 +1,22 @@
+{
+  "api_keys": {
+    "deepseek_chat": {
+      "key": "<your api key for chat>",
+      "base_url": "https://api.deepseek.com/v1"
+    },
+    "search": {
+      "key": "<your api for search>",
+      "base_url": "https://api.bochaai.com/v1/web-search"
+    },
+    "image_recognition": {
+      "key": "<your api for image recognition>",
+      "base_url": "https://dashscope.aliyuncs.com/api/v1"
+    }
+  },
+  "character": {
+    "name": "<bot name>",
+    "personality": "<bot another name>",
+    "brother_qqid": "<bot's master id>",
+    "catchphrases": "<bot catchphrase>"
+  }
+}
