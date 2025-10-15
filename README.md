@@ -1,6 +1,6 @@
 # ShizukuNyaBot
 
- 一个基于 DeepSeek API 的AI聊天系统，支持以下多种运行模式：
+ 一个基于大语言APIKeys的AI聊天系统，支持以下多种运行模式：
 - Koishi/AstrBot/NoneBot 映射模式（FastAPI，OpenAI Chat Completion 兼容）
 - 终端聊天模式（命令行交互）
 - 沙箱聊天模式（Flask + Web 前端）
