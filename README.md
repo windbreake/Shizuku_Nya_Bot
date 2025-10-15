@@ -6,7 +6,7 @@
 - 沙箱聊天模式（Flask + Web 前端）
 - 统一API服务模式（提供统一接口支持多种AI功能）
 
-![项目吉祥物雪风酱](./src/static/images/yukikaze.jpg)
+![项目吉祥物雪风酱](./pictures/yukikaze.jpg)
 
 ---
 
