@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 # 确保正确导入 colorama
 from colorama import Fore, init
 from .database import DatabaseManager
+from .shared_utils import create_chat_completion_response, create_error_response, create_streaming_response_chunk, extract_user_input
 
 init(autoreset=True)
 
@@ -27,7 +28,7 @@ async def chat_completions(request: Request):
         # 动态选择模型，后端支持 deepseek-chat / deepseek-vl / o4-mini-preview
         selected_model = data.get("model", "deepseek-chat")
 
-        # 新增：neko 模型专属处理，直接走本地 AIChatSystem
+        # 新增：neko 模型专属处理
         if selected_model == "neko":
             user_input = ""
             image_data = None
@@ -45,18 +46,7 @@ async def chat_completions(request: Request):
                     break
 
             response_text = chat_system.chat(user_input, image=image_data)
-            return {
-                "id": f"chatcmpl-{int(time.time())}",
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": "neko",
-                "choices": [{
-                    "index": 0,
-                    "message": {"role": "assistant", "content": response_text},
-                    "finish_reason": "stop"
-                }],
-                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-            }
+            return create_chat_completion_response(response_text, "neko")
 
         # 提取用户消息
         user_input = ""
@@ -135,28 +125,11 @@ async def chat_completions(request: Request):
         return result
 
     except Exception as e:
-        import traceback
-        error_trace = traceback.format_exc()
-        print(Fore.RED + f"完整错误信息:\n{error_trace}")
-
-        # 即使出现错误，也返回有效的JSON格式
-        return {
-            "id": f"error-{int(time.time())}",
-            "object": "chat.completion",
-            "created": int(time.time()),
-            "model": data.get("model", "deepseek-chat"),
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": f"出错了喵({str(e)})"
-                    },
-                    "finish_reason": "stop"
-                }
-            ],
-            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-        }
+        # 确保data变量在异常处理中可用
+        model_name = "deepseek-chat"
+        if 'data' in locals() and data is not None:
+            model_name = data.get("model", "deepseek-chat")
+        return create_error_response(e, model_name, data if 'data' in locals() else None)
 
 
 @app.get("/")
@@ -211,6 +184,32 @@ def find_available_port(start_port=5000, end_port=5100):
         if not is_port_in_use(port):
             return port
     return None
+
+
+def create_error_response(e, model_name, data=None):
+    """创建统一的错误响应"""
+    import traceback
+    error_trace = traceback.format_exc()
+    print(Fore.RED + f"完整错误信息:\n{error_trace}")
+    
+    # 即使出现错误，也返回有效的JSON格式
+    return {
+        "id": f"error-{int(time.time())}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": model_name,
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": f"出错了喵({str(e)})"
+                },
+                "finish_reason": "stop"
+            }
+        ],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    }
 
 
 def run_koishi_service():
@@ -345,26 +344,11 @@ def run_koishi_service():
             return result
 
         except Exception as e:
-            import traceback
-            error_trace = traceback.format_exc()
-            print(Fore.RED + f"完整错误信息:\n{error_trace}")
-            return {
-                "id": f"error-{int(time.time())}",
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": data.get("model", "deepseek-chat"),
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "content": f"出错了喵({str(e)})"
-                        },
-                        "finish_reason": "stop"
-                    }
-                ],
-                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-            }
+            # 确保data变量在异常处理中可用
+            model_name = "deepseek-chat"
+            if 'data' in locals() and data is not None:
+                model_name = data.get("model", "deepseek-chat")
+            return create_error_response(e, model_name, data if 'data' in locals() else None)
 
     @fastapi_app.get("/")
     async def root():
@@ -391,7 +375,7 @@ def run_koishi_service():
         }
 
     @fastapi_app.get("/health")
-    async def health_check():
+    async def inner_health_check():
         """服务健康检查"""
         return {"status": "ok", "service": "Koishi API"}
 
@@ -408,32 +392,8 @@ def run_koishi_service():
             print(Fore.CYAN + f"收到统一API请求: {data}")
 
             # 提取用户消息
-            user_input = ""
-            image_urls = []
             messages = data.get('messages', [])
-            
-            # 遍历所有消息，提取文本和图像URL
-            for msg in messages:
-                if msg.get('role') == 'user':
-                    content = msg.get('content', "")
-                    # 处理包含image_url的消息
-                    if isinstance(content, list):
-                        # 如果是列表类型，说明包含多种类型的内容（如text和image_url）
-                        text_parts = []
-                        for item in content:
-                            if isinstance(item, dict):
-                                if item.get('type') == 'text':
-                                    text_parts.append(item.get('text', ''))
-                                elif item.get('type') == 'image_url':
-                                    # 对于图片URL，提取实际URL并保存
-                                    image_url = item.get('image_url', {}).get('url', '')
-                                    if image_url:
-                                        image_urls.append(image_url)
-                                        text_parts.append(f'[图片: {image_url}]')
-                        user_input += ''.join(text_parts)
-                    else:
-                        # 如果是字符串类型，直接使用
-                        user_input += content
+            user_input, image_urls = extract_user_input(messages)
 
             print(Fore.GREEN + f"处理后用户输入: {user_input}")
             print(Fore.GREEN + f"提取到图片URL: {image_urls}")
@@ -452,13 +412,7 @@ def run_koishi_service():
                     
                     # 逐字发送响应
                     for i, char in enumerate(full_response):
-                        payload = {
-                            "choices": [{
-                                "delta": {"content": char},
-                                "index": 0,
-                                "finish_reason": None
-                            }]
-                        }
+                        payload = create_streaming_response_chunk(char)
                         yield f"data: {json.dumps(payload)}\n\n"
                     
                     # 发送结束标记
@@ -475,27 +429,7 @@ def run_koishi_service():
                 response_text = chat_system.chat(user_input)
 
             # 构造符合OpenAI格式的响应
-            result = {
-                "id": f"chatcmpl-{int(time.time())}",
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": "neko",  # 对前端隐藏真实模型，使用"neko"作为模型名称
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "content": response_text
-                        },
-                        "finish_reason": "stop"
-                    }
-                ],
-                "usage": {
-                    "prompt_tokens": 0,
-                    "completion_tokens": 0,
-                    "total_tokens": 0
-                }
-            }
+            result = create_chat_completion_response(response_text, "neko")
             
             print(Fore.CYAN + f"发送统一API响应: {result}")
             return result
@@ -506,23 +440,7 @@ def run_koishi_service():
             print(Fore.RED + f"统一API错误:\n{error_trace}")
             
             # 返回错误信息但仍保持OpenAI格式
-            return {
-                "id": f"error-{int(time.time())}",
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": "neko",  # 错误响应也使用"neko"作为模型名称
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "content": f"出错了喵({str(e)})"
-                        },
-                        "finish_reason": "stop"
-                    }
-                ],
-                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-            }
+            return create_error_response(e, "neko")
 
     # 查找可用端口
     port = find_available_port()
@@ -537,6 +455,5 @@ def run_koishi_service():
         fastapi_app,
         host="127.0.0.1",  # 使用127.0.0.1而不是0.0.0.0更安全
         port=port,  # 使用找到的可用端口
-        timeout_keep_alive=120,  # 增加保持连接超时
-        log_level="debug"  # 开启调试日志
+        timeout_keep_alive=120  # 增加保持连接超时
     )
