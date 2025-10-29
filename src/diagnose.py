@@ -1,8 +1,11 @@
-import socket
-import requests
-from colorama import Fore, init  # 添加必要的导入
-import sys
+"""系统诊断工具，用于检查服务状态和连接"""
+
 import os
+import socket
+import sys
+
+import requests
+from colorama import Fore, init
 
 # 将项目根目录添加到 sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -92,5 +95,10 @@ def full_diagnosis():
     print(Fore.CYAN + "\n诊断完成!")
 
 
-if __name__ == "__main__":
+def main():
+    """主函数"""
     full_diagnosis()
+
+
+if __name__ == "__main__":
+    main()
