@@ -46,19 +46,23 @@ def test_local_api():
     running_service_port = None
     for port in range(5000, 5011):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(('localhost', port)) == 0:
-                running_service_port = port
-                break
+            s.settimeout(1)  # 设置1秒超时
+            try:
+                if s.connect_ex(('localhost', port)) == 0:
+                    running_service_port = port
+                    break
+            except socket.timeout:
+                continue
 
     if running_service_port:
         print(Fore.GREEN + f"  在端口 {running_service_port} 检测到运行中的服务")
         try:
             # 测试根路径
-            root_response = requests.get(f"http://localhost:{running_service_port}", timeout=5)
+            root_response = requests.get(f"http://localhost:{running_service_port}", timeout=3)
             print(Fore.GREEN + f"  根路径状态: {root_response.status_code} - {root_response.json()}")
 
             # 测试/v1/models端点
-            models_response = requests.get(f"http://localhost:{running_service_port}/v1/models", timeout=5)
+            models_response = requests.get(f"http://localhost:{running_service_port}/v1/models", timeout=3)
             print(Fore.GREEN + f"  模型列表状态: {models_response.status_code} - {models_response.json()}")
         except Exception as e:
             print(Fore.RED + f"  本地API测试失败: {str(e)}")
@@ -76,7 +80,7 @@ def test_deepseek_api():
         response = requests.get(
             f"{CONFIG['api']['base_url']}/models",
             headers=headers,
-            timeout=10
+            timeout=5
         )
         print(Fore.GREEN + f"  API状态: {response.status_code}")
         if response.status_code == 200:
@@ -183,3 +187,4 @@ if __name__ == "__main__":
                 run_mode(mode)
         except (IndexError, ValueError):
             print(Fore.RED + "无效的命令行参数。请使用 0, 1, 2, 3 或 5 指定模式")
+
