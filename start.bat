@@ -21,7 +21,7 @@ if errorlevel 1 (
 cls                                  :: 在每次显示主菜单前清屏
 echo.
 echo ==============================================
-echo   🐱 傲娇猫娘小雫 - 运行模式选择
+echo   🐱 ShizukuNyaBotLauncher- 运行模式选择
 echo ==============================================
 echo.
 echo   0: 映射至Koishi (OpenAI API兼容)
@@ -56,10 +56,10 @@ goto get_choice
 REM 同时启动 Koishi 映射和统一API服务
 (
     echo.
-    echo 🚀 启动Koishi映射模式...
+    echo 🚀 启动映射模式...
     start "Koishi Server" cmd /k "%PYTHON_EXE% main.py 0"
     if errorlevel 1 (
-        echo 启动失败! 请检查错误信息
+        echo 警告: Koishi服务启动可能需要一些时间
     ) else (
         echo 启动成功! 日志已在新窗口中显示
     )
@@ -68,7 +68,7 @@ REM 同时启动 Koishi 映射和统一API服务
     echo 🚀 启动统一API服务...
     start "Unified API Server" cmd /k "%PYTHON_EXE% src/unified_api.py"
     if errorlevel 1 (
-        echo 启动失败! 请检查错误信息
+        echo 警告: 统一API服务启动可能需要一些时间
     ) else (
         echo 启动成功! 日志已在新窗口中显示
     )
@@ -80,24 +80,23 @@ goto main_menu
 echo.
 echo 🐱 启动终端聊天模式...
 start "Terminal Chat" cmd /k "%PYTHON_EXE% main.py 1"
-if errorlevel 1 (
-    echo 启动失败! 请检查错误信息
-) else (
-    echo 启动成功! 日志已在新窗口中显示
-)
+echo 终端聊天模式已在新窗口中启动
 REM 自动继续，无需按键
 goto main_menu
 
 :run_sandbox
 echo.
 echo 🌐 启动沙箱聊天模式...
-start "Sandbox Server" cmd /k "%PYTHON_EXE% main.py 2"
-REM 去掉以下自动打开浏览器，避免重复弹窗
-REM start "" http://localhost:2555/sandbox
-if errorlevel 1 (
-    echo 启动失败! 请检查错误信息
+REM 检查端口是否已被占用
+%PYTHON_EXE% -c "import socket;s=socket.socket(socket.AF_INET, socket.SOCK_STREAM);result=s.connect_ex(('localhost', 8888));s.close();exit(result)" >nul
+if %errorlevel% equ 0 (
+    echo 端口8888已被占用，直接打开浏览器
+    start "" http://localhost:8888/sandbox
 ) else (
-    echo 启动成功! 日志已在新窗口中显示
+    start "Sandbox Server" cmd /k "set DEFAULT_PAGE=/sandbox&&set WERKZEUG_RUN_MAIN=true&&%PYTHON_EXE% main.py 2"
+    echo 沙箱聊天模式启动命令已执行，请查看新窗口中的日志
+    timeout /t 2 /nobreak >nul
+    start "" http://localhost:8888/sandbox
 )
 goto main_menu
 
@@ -105,11 +104,7 @@ goto main_menu
 echo.
 echo 🩺 运行服务诊断...
 start "Diagnosis" cmd /k "%PYTHON_EXE% main.py 3"
-if errorlevel 1 (
-    echo 诊断启动失败! 请检查错误信息
-) else (
-    echo 诊断已启动! 日志已在新窗口中显示
-)
+echo 服务诊断已在新窗口中启动
 REM 自动继续，无需按键
 goto main_menu
 
@@ -117,11 +112,7 @@ goto main_menu
 echo.
 echo 🛠 启动数据库维护工具...
 start "数据库维护工具" cmd /k "start_cleanup.bat"
-if errorlevel 1 (
-    echo 启动失败! 请检查错误信息
-) else (
-    echo 启动成功! 维护工具已在新窗口中打开
-)
+echo 数据库维护工具已在新窗口中启动
 REM 自动继续，无需按键
 goto main_menu
 
@@ -129,20 +120,24 @@ goto main_menu
 echo.
 echo 🛠 创建数据库和表...
 start "Create Database" cmd /k "%PYTHON_EXE% src/create_database.py"
-if errorlevel 1 (
-    echo 创建数据库失败! 请检查错误信息
-) else (
-    echo 数据库创建成功! 日志已在新窗口中显示
-)
+echo 数据库创建已在新窗口中启动
 REM 自动继续，无需按键
 goto main_menu
 
 :open_panel
 echo.
 echo 🌐 启动 Web 控制面板服务...
-start "Web Control Panel" cmd /k "set WERKZEUG_RUN_MAIN=true&&%PYTHON_EXE% main.py 2"
-timeout /t 1 /nobreak >nul
-start "" http://localhost:8888/control_panel   REM 修改端口为Web服务器匹配
+REM 检查端口是否已被占用
+%PYTHON_EXE% -c "import socket;s=socket.socket(socket.AF_INET, socket.SOCK_STREAM);result=s.connect_ex(('localhost', 8888));s.close();exit(result)" >nul
+if %errorlevel% equ 0 (
+    echo 端口8888已被占用，直接打开浏览器
+    start "" http://localhost:8888/control_panel
+) else (
+    start "Web Control Panel" cmd /k "set DEFAULT_PAGE=/control_panel&&set WERKZEUG_RUN_MAIN=true&&%PYTHON_EXE% main.py 5"
+    echo Web控制面板服务启动命令已执行，请查看新窗口中的日志
+    timeout /t 2 /nobreak >nul
+    start "" http://localhost:8888/control_panel
+)
 goto main_menu
 
 :end
