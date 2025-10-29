@@ -10,9 +10,9 @@ USE catgirl_db;
 -- 创建角色信息表
 CREATE TABLE IF NOT EXISTS character_info (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(50) NOT NULL DEFAULT '小雫',
+    name VARCHAR(50) NOT NULL DEFAULT 'Default Character',
     personality VARCHAR(500) DEFAULT NULL,
-    brother_qqid VARCHAR(20) DEFAULT 'NekoSunami',
+    brother_qqid VARCHAR(20) DEFAULT 'Default QQID',
     height VARCHAR(10) DEFAULT '160cm',
     weight VARCHAR(10) DEFAULT '45kg',
     catchphrases VARCHAR(100) DEFAULT NULL,
@@ -21,11 +21,11 @@ CREATE TABLE IF NOT EXISTS character_info (
     UNIQUE KEY unique_name (name)
 );
 
--- 插入默认角色信息
+-- 插入默认角色信息，可以自行编辑
 INSERT INTO character_info (name, personality, brother_qqid, height, weight, catchphrases)
-SELECT * FROM (SELECT '小雫', '傲娇兄控猫娘，说话风格参考碧蓝航线的雪风', 'NekoSunami', '160cm', '45kg', '喵~') AS tmp
+SELECT * FROM (SELECT 'Default Character', 'Default personality', 'Default QQID', '160cm', '45kg', 'Hello') AS tmp
 WHERE NOT EXISTS (
-    SELECT name FROM character_info WHERE name = '小雫'
+    SELECT name FROM character_info WHERE name = 'Default Character'
 ) LIMIT 1;
 
 -- 创建聊天记录表
