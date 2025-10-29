@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+<head>
+  <meta charset="UTF-8">
+  <title>系统监控面板</title>
+  <!-- Bootstrap CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { 
+      font-family: 'Microsoft YaHei', sans-serif; 
+      background-color: #f8f9fa;
+      padding: 20px;
+    }
+    .card {
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      margin-bottom: 20px;
+      border: none;
+    }
+    .card-header {
+      background-color: #fff;
+      border-bottom: 1px solid rgba(0, 0, 0, 0.125);
+      font-weight: bold;
+    }
+    .btn-primary {
+      background-color: #6f42c1;
+      border-color: #6f42c1;
+    }
+    .btn-primary:hover {
+      background-color: #5a32a3;
+      border-color: #5a32a3;
+    }
+    .navbar-brand {
+      font-weight: bold;
+    }
+    h1 {
+      color: #6f42c1;
+    }
+    .stat-card {
+      text-align: center;
+      padding: 20px;
+    }
+    .stat-value {
+      font-size: 2rem;
+      font-weight: bold;
+      color: #6f42c1;
+    }
+    .stat-label {
+      font-size: 0.9rem;
+      color: #6c757d;
+    }
+    .chart-container {
+      position: relative;
+      height: 300px;
+      margin: 20px 0;
+    }
+  </style>
+</head>
+<body>
+  <nav class="navbar navbar-expand-lg navbar-light bg-white shadow-sm mb-4">
+    <div class="container-fluid">
+      <a class="navbar-brand" href="#">📊 系统监控面板</a>
+    </div>
+  </nav>
+
+  <div class="container">
+    <!-- 实时统计卡片 -->
+    <div class="row">
+      <div class="col-md-3">
+        <div class="card stat-card">
+          <div class="stat-value" id="cpu-percent">0%</div>
+          <div class="stat-label">CPU 使用率</div>
+        </div>
+      </div>
+      <div class="col-md-3">
+        <div class="card stat-card">
+          <div class="stat-value" id="memory-percent">0%</div>
+          <div class="stat-label">内存使用率</div>
+        </div>
+      </div>
+      <div class="col-md-3">
+        <div class="card stat-card">
+          <div class="stat-value" id="token-count">0</div>
+          <div class="stat-label">Token 数量</div>
+        </div>
+      </div>
+      <div class="col-md-3">
+        <div class="card stat-card">
+          <div class="stat-value" id="uptime">00:00:00</div>
+          <div class="stat-label">运行时间</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 图表区域 -->
+    <div class="row">
+      <div class="col-md-6">
+        <div class="card">
+          <div class="card-header">
+            CPU 使用率历史
+          </div>
+          <div class="card-body">
+            <div class="chart-container">
+              <canvas id="cpuChart"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-6">
+        <div class="card">
+          <div class="card-header">
+            内存使用率历史
+          </div>
+          <div class="card-body">
+            <div class="chart-container">
+              <canvas id="memoryChart"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="col-md-12">
+        <div class="card">
+          <div class="card-header">
+            Token 使用统计
+          </div>
+          <div class="card-body">
+            <div class="chart-container">
+              <canvas id="tokenChart"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 详细信息 -->
+    <div class="row">
+      <div class="col-md-12">
+        <div class="card">
+          <div class="card-header">
+            系统信息
+          </div>
+          <div class="card-body">
+            <div class="row">
+              <div class="col-md-4">
+                <p><strong>CPU:</strong> <span id="cpu-info">-</span></p>
+                <p><strong>核心数:</strong> <span id="cpu-cores">-</span></p>
+              </div>
+              <div class="col-md-4">
+                <p><strong>总内存:</strong> <span id="total-memory">-</span></p>
+                <p><strong>已用内存:</strong> <span id="used-memory">-</span></p>
+              </div>
+              <div class="col-md-4">
+                <p><strong>Python版本:</strong> <span id="python-version">-</span></p>
+                <p><strong>平台:</strong> <span id="platform">-</span></p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bootstrap JS -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    // 初始化图表
+    const cpuCtx = document.getElementById('cpuChart').getContext('2d');
+    const memoryCtx = document.getElementById('memoryChart').getContext('2d');
+    const tokenCtx = document.getElementById('tokenChart').getContext('2d');
+
+    // CPU使用率图表
+    const cpuChart = new Chart(cpuCtx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [{
+          label: 'CPU 使用率 (%)',
+          data: [],
+          borderColor: 'rgb(255, 99, 132)',
+          backgroundColor: 'rgba(255, 99, 132, 0.2)',
+          fill: true,
+          tension: 0.1
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          y: {
+            min: 0,
+            max: 100,
+            ticks: {
+              callback: function(value) {
+                return value + '%';
+              }
+            }
+          }
+        }
+      }
+    });
+
+    // 内存使用率图表
+    const memoryChart = new Chart(memoryCtx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [{
+          label: '内存使用率 (%)',
+          data: [],
+          borderColor: 'rgb(54, 162, 235)',
+          backgroundColor: 'rgba(54, 162, 235, 0.2)',
+          fill: true,
+          tension: 0.1
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          y: {
+            min: 0,
+            max: 100,
+            ticks: {
+              callback: function(value) {
+                return value + '%';
+              }
+            }
+          }
+        }
+      }
+    });
+
+    // Token使用图表
+    const tokenChart = new Chart(tokenCtx, {
+      type: 'bar',
+      data: {
+        labels: ['输入Token', '输出Token', '总Token'],
+        datasets: [{
+          label: 'Token 数量',
+          data: [0, 0, 0],
+          backgroundColor: [
+            'rgba(255, 99, 132, 0.2)',
+            'rgba(54, 162, 235, 0.2)',
+            'rgba(75, 192, 192, 0.2)'
+          ],
+          borderColor: [
+            'rgb(255, 99, 132)',
+            'rgb(54, 162, 235)',
+            'rgb(75, 192, 192)'
+          ],
+          borderWidth: 1
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          y: {
+            beginAtZero: true
+          }
+        }
+      }
+    });
+
+    // 更新图表数据
+    function updateCharts(data) {
+      const now = new Date().toLocaleTimeString();
+      
+      // 更新CPU图表
+      if (cpuChart.data.labels.length > 20) {
+        cpuChart.data.labels.shift();
+        cpuChart.data.datasets[0].data.shift();
+      }
+      cpuChart.data.labels.push(now);
+      cpuChart.data.datasets[0].data.push(data.cpu_percent);
+      cpuChart.update();
+      
+      // 更新内存图表
+      if (memoryChart.data.labels.length > 20) {
+        memoryChart.data.labels.shift();
+        memoryChart.data.datasets[0].data.shift();
+      }
+      memoryChart.data.labels.push(now);
+      memoryChart.data.datasets[0].data.push(data.memory_percent);
+      memoryChart.update();
+      
+      // 更新Token图表
+      tokenChart.data.datasets[0].data[0] = data.token_stats.input_tokens;
+      tokenChart.data.datasets[0].data[1] = data.token_stats.output_tokens;
+      tokenChart.data.datasets[0].data[2] = data.token_stats.total_tokens;
+      tokenChart.update();
+    }
+
+    // 更新统计卡片
+    function updateStats(data) {
+      document.getElementById('cpu-percent').textContent = data.cpu_percent.toFixed(1) + '%';
+      document.getElementById('memory-percent').textContent = data.memory_percent.toFixed(1) + '%';
+      document.getElementById('token-count').textContent = data.token_stats.total_tokens;
+      document.getElementById('uptime').textContent = formatUptime(data.uptime);
+      
+      // 更新系统信息
+      document.getElementById('cpu-info').textContent = data.system_info.cpu;
+      document.getElementById('cpu-cores').textContent = data.system_info.cpu_count;
+      document.getElementById('total-memory').textContent = (data.system_info.total_memory / (1024**3)).toFixed(2) + ' GB';
+      document.getElementById('used-memory').textContent = (data.system_info.used_memory / (1024**3)).toFixed(2) + ' GB';
+      document.getElementById('python-version').textContent = data.system_info.python_version;
+      document.getElementById('platform').textContent = data.system_info.platform;
+    }
+
+    // 格式化运行时间
+    function formatUptime(seconds) {
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      const secs = Math.floor(seconds % 60);
+      return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+
+    // 获取监控数据
+    async function fetchMonitoringData() {
+      try {
+        const response = await fetch('/api/monitoring');
+        const data = await response.json();
+        updateCharts(data);
+        updateStats(data);
+      } catch (error) {
+        console.error('获取监控数据失败:', error);
+      }
+    }
+
+    // 页面加载完成后初始化
+    document.addEventListener('DOMContentLoaded', function() {
+      // 立即获取一次数据
+      fetchMonitoringData();
+      // 每2秒更新一次数据
+      setInterval(fetchMonitoringData, 2000);
+    });
+  </script>
+</body>
+</html>
