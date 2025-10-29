@@ -1,5 +1,6 @@
 import os
 import sys
+
 # 添加项目根目录到Python路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -19,9 +20,11 @@ app = Flask(__name__)
 
 # 从配置获取API密钥和基础URL
 from src.config import CONFIG
+from src.shared_utils import create_chat_completion_response, create_error_response, extract_user_input, should_search
 
 # 有效自定义API key集合（实际项目中应该从数据库或配置文件读取）
 VALID_PROXY_KEYS = {'neko-proxy-key-123', '114514'}
+
 
 # 中间件函数：验证自定义API key
 def authenticate():
@@ -30,10 +33,11 @@ def authenticate():
         # 提取Bearer token
         if proxy_key.startswith('Bearer '):
             proxy_key = proxy_key[7:]  # 移除'Bearer '前缀
-    
+
     if not proxy_key or proxy_key not in VALID_PROXY_KEYS:
         return jsonify({'error': 'Invalid API key'}), 401
     return None  # 通过验证
+
 
 @app.before_request
 def before_request():
@@ -42,6 +46,7 @@ def before_request():
         auth_error = authenticate()
         if auth_error:
             return auth_error
+
 
 @app.route('/v1/models', methods=['GET'])
 def model_list():
@@ -54,10 +59,12 @@ def model_list():
         ]
     })
 
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """服务健康检查"""
     return jsonify({"status": "ok", "service": "Unified API"})
+
 
 @app.route('/v1/chat/completions', methods=['POST'])
 def chat_completions():
@@ -67,32 +74,8 @@ def chat_completions():
         print(f"收到统一API请求: {data}")
 
         # 提取用户消息
-        user_input = ""
-        image_urls = []
         messages = data.get('messages', [])
-        
-        # 遍历所有消息，提取文本和图像URL
-        for msg in messages:
-            if msg.get('role') == 'user':
-                content = msg.get('content', "")
-                # 处理包含image_url的消息
-                if isinstance(content, list):
-                    # 如果是列表类型，说明包含多种类型的内容（如text和image_url）
-                    text_parts = []
-                    for item in content:
-                        if isinstance(item, dict):
-                            if item.get('type') == 'text':
-                                text_parts.append(item.get('text', ''))
-                            elif item.get('type') == 'image_url':
-                                # 对于图片URL，提取实际URL并保存
-                                image_url = item.get('image_url', {}).get('url', '')
-                                if image_url:
-                                    image_urls.append(image_url)
-                                    text_parts.append(f'[图片: {image_url}]')
-                    user_input += ''.join(text_parts)
-                else:
-                    # 如果是字符串类型，直接使用
-                    user_input += content
+        user_input, image_urls = extract_user_input(messages)
 
         print(f"处理后用户输入: {user_input}")
         print(f"提取到图片URL: {image_urls}")
@@ -106,10 +89,10 @@ def chat_completions():
                 # 从URL获取图片
                 response = requests.get(image_url, timeout=30)
                 response.raise_for_status()
-                
+
                 # 将图片转换为Base64
                 image_data = base64.b64encode(response.content).decode('utf-8')
-                
+
                 # 使用阿里云通义VL MAX分析图片
                 headers = {
                     "Authorization": f"Bearer {CONFIG['aliyun_api']['key']}",
@@ -161,11 +144,11 @@ def chat_completions():
                             image_description = " ".join(text_parts)
                         else:
                             image_description = str(content)
-                        
+
                         user_input = f"[图片内容: {image_description}] {user_input}"
                 else:
                     user_input = f"[图片分析失败] {user_input}"
-                    
+
             except Exception as e:
                 print(f"图片处理错误: {e}")
                 user_input = f"[图片处理出错] {user_input}"
@@ -174,47 +157,171 @@ def chat_completions():
         search_result = None
         if should_search(user_input):
             try:
+                # 使用Kimi API进行联网搜索
                 headers = {
                     "Authorization": f"Bearer {CONFIG['search_api']['key']}",
                     "Content-Type": "application/json"
                 }
-                
-                payload = {
-                    "query": user_input,
-                    "count": 10
+
+                # 构造Kimi API请求消息
+                kimi_messages = [
+                    {"role": "system", "content": "你是 Kimi，由 Moonshot AI 提供支持的人工智能助手。"},
+                    {"role": "user", "content": user_input}
+                ]
+
+                # 发送请求到Kimi API
+                kimi_payload = {
+                    "model": "kimi-k2-0905-preview",
+                    "messages": kimi_messages,
+                    "temperature": 0.6,
+                    "max_tokens": 32768,
+                    "tools": [
+                        {
+                            "type": "builtin_function",
+                            "function": {
+                                "name": "$web_search",
+                            },
+                        }
+                    ]
                 }
-                
-                search_response = requests.post(
-                    CONFIG['search_api']['base_url'],
+
+                kimi_response = requests.post(
+                    f"{CONFIG['search_api']['base_url']}/chat/completions",
                     headers=headers,
-                    json=payload
+                    json=kimi_payload
                 )
-                
-                if search_response.status_code == 200:
-                    result = search_response.json()
-                    # 解析搜索结果
-                    if "data" in result and "webPages" in result["data"] and "value" in result["data"]["webPages"]:
-                        search_results = result["data"]["webPages"]["value"][:5]  # 只取前5个结果
-                        formatted_results = []
-                        for item in search_results:
-                            name = item.get("name", "")
-                            snippet = item.get("snippet", "")
-                            url = item.get("url", "")
-                            formatted_results.append({
-                                "title": name,
-                                "url": url,
-                                "snippet": snippet
-                            })
-                        
-                        # 将搜索结果转换为文本格式
-                        search_result_text = "搜索结果:\n"
-                        for i, item in enumerate(formatted_results, 1):
-                            search_result_text += f"{i}. {item['title']}\n   {item['snippet']}\n   URL: {item['url']}\n\n"
-                        
-                        search_result = search_result_text
-                        user_input = f"用户问题: {user_input}\n{search_result}"
+
+                if kimi_response.status_code == 200:
+                    result = kimi_response.json()
+                    # 检查是否需要工具调用
+                    if result.get("choices") and len(result["choices"]) > 0:
+                        choice = result["choices"][0]
+                        if choice.get("finish_reason") == "tool_calls" and choice.get("message") and choice[
+                            "message"].get("tool_calls"):
+                            # 处理工具调用
+                            tool_calls = choice["message"]["tool_calls"]
+                            for tool_call in tool_calls:
+                                if tool_call["function"]["name"] == "$web_search":
+                                    # 执行搜索工具调用
+                                    tool_call_id = tool_call["id"]
+                                    tool_call_arguments = json.loads(tool_call["function"]["arguments"])
+
+                                    # 将工具调用结果返回给Kimi API
+                                    kimi_messages.append(choice["message"])
+                                    kimi_messages.append({
+                                        "role": "tool",
+                                        "tool_call_id": tool_call_id,
+                                        "name": "$web_search",
+                                        "content": json.dumps(tool_call_arguments)
+                                    })
+
+                                    # 再次调用Kimi API获取最终结果
+                                    kimi_payload["messages"] = kimi_messages
+                                    final_response = requests.post(
+                                        f"{CONFIG['search_api']['base_url']}/chat/completions",
+                                        headers=headers,
+                                        json=kimi_payload
+                                    )
+
+                                    if final_response.status_code == 200:
+                                        final_result = final_response.json()
+                                        if final_result.get("choices") and len(final_result["choices"]) > 0:
+                                            final_choice = final_result["choices"][0]
+                                            if final_choice.get("message") and final_choice["message"].get("content"):
+                                                search_result = final_choice["message"]["content"]
+                                                user_input = f"用户问题: {user_input}\n搜索结果: {search_result}"
+                                    break
+                else:
+                    print(f"Kimi API错误: {kimi_response.status_code} - {kimi_response.text}")
+
             except Exception as e:
                 print(f"搜索错误: {e}")
+
+        # 检查是否是图片生成请求
+        is_image_gen_request = False
+        if "画" in user_input or "生成图片" in user_input or "画一张" in user_input or "绘图" in user_input:
+            is_image_gen_request = True
+
+        # 检查是否是视频生成请求
+        is_video_gen_request = False
+        if "视频" in user_input or "生成视频" in user_input or "制作视频" in user_input:
+            is_video_gen_request = True
+
+        # 图片生成请求处理
+        if is_image_gen_request and CONFIG['image_generation_api']['key']:
+            try:
+                # 构造图片生成请求
+                image_headers = {
+                    "Authorization": f"Bearer {CONFIG['image_generation_api']['key']}",
+                    "Content-Type": "application/json"
+                }
+
+                image_payload = {
+                    "prompt": user_input,
+                    "n": 1,
+                    "size": "1024x1024"
+                }
+
+                # 发送请求到图片生成API
+                image_response = requests.post(
+                    f"{CONFIG['image_generation_api']['base_url']}/images/generations",
+                    headers=image_headers,
+                    json=image_payload
+                )
+
+                if image_response.status_code == 200:
+                    result = image_response.json()
+                    # 构造图片响应格式
+                    response_content = "我为您生成了图片:\n"
+                    if "data" in result and len(result["data"]) > 0:
+                        response_content += f"![生成的图片]({result['data'][0]['url']})\n"
+                        if "revised_prompt" in result["data"][0]:
+                            response_content += f"优化后的提示词: {result['data'][0]['revised_prompt']}\n"
+
+                    return jsonify(create_chat_completion_response(response_content, "neko-image-generator"))
+                else:
+                    # 如果图片生成失败，则继续使用聊天API
+                    print(f"图片生成失败: {image_response.status_code} - {image_response.text}")
+            except Exception as e:
+                print(f"图片生成错误: {e}")
+
+        # 视频生成请求处理
+        if is_video_gen_request and CONFIG['video_generation_api']['key'] and CONFIG['video_generation_api'][
+            'base_url']:
+            try:
+                # 构造视频生成请求
+                video_headers = {
+                    "Authorization": f"Bearer {CONFIG['video_generation_api']['key']}",
+                    "Content-Type": "application/json"
+                }
+
+                video_payload = {
+                    "prompt": user_input,
+                    "duration": 5  # 默认5秒视频
+                }
+
+                # 发送请求到视频生成API
+                video_response = requests.post(
+                    f"{CONFIG['video_generation_api']['base_url']}/videos/generations",
+                    headers=video_headers,
+                    json=video_payload
+                )
+
+                if video_response.status_code == 200:
+                    result = video_response.json()
+                    # 构造视频响应格式
+                    response_content = "我为您生成了视频:\n"
+                    if "data" in result and len(result["data"]) > 0:
+                        response_content += f"视频链接: {result['data'][0]['url']}\n"
+                        if "revised_prompt" in result["data"][0]:
+                            response_content += f"优化后的提示词: {result['data'][0]['revised_prompt']}\n"
+
+                    return jsonify(create_chat_completion_response(response_content, "neko-video-generator"))
+                else:
+                    # 如果视频生成失败，则继续使用聊天API
+                    print(f"视频生成失败: {video_response.status_code} - {video_response.text}")
+            except Exception as e:
+                print(f"视频生成错误: {e}")
 
         # 使用DeepSeek API生成回复
         headers = {
@@ -246,7 +353,7 @@ def chat_completions():
                     }
                     yield f"data: {json.dumps(payload)}\n\n"
                 yield "data: [DONE]\n\n"
-            
+
             return app.response_class(generate(), mimetype='text/event-stream')
 
         # 发送请求到DeepSeek API
@@ -262,76 +369,16 @@ def chat_completions():
             result["model"] = "neko"
             return jsonify(result)
         else:
-            return jsonify({
-                "id": f"error-{int(time.time())}",
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": "neko",
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "content": f"出错了喵({api_response.status_code} - {api_response.text})"
-                        },
-                        "finish_reason": "stop"
-                    }
-                ],
-                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-            })
+            return jsonify(create_error_response(Exception(f"{api_response.status_code} - {api_response.text}")))
 
     except Exception as e:
         import traceback
         error_trace = traceback.format_exc()
         print(f"统一API错误:\n{error_trace}")
-        
-        # 返回错误信息但仍保持OpenAI格式
-        return jsonify({
-            "id": f"error-{int(time.time())}",
-            "object": "chat.completion",
-            "created": int(time.time()),
-            "model": "neko",
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": f"出错了喵({str(e)})"
-                    },
-                    "finish_reason": "stop"
-                }
-            ],
-            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-        })
 
-def should_search(user_input):
-    """判断是否需要进行搜索"""
-    if not user_input:
-        return False
-        
-    # 定义触发搜索的关键词模式
-    search_keywords = [
-        r'(?:(?:搜索|查|找|了解|知道|什么是|是什么|怎么样|如何|怎么|哪里|哪儿|哪个|哪些|谁是|谁的|几点|时间|日期|天气|新闻|最新|最近|现在).*)',
-        r'(.*(?:天气|新闻|股价|比分|时间|日期|定义|解释|介绍|攻略|评测|比较|区别|方法|步骤|教程|怎么做).*)',
-        r'(.*(?:最新|最近|现在|今天|明天|昨天|今年|去年|这个月|下个月|上个月).*)'
-    ]
-    
-    import re
-    # 检查用户输入是否包含触发搜索的关键词
-    for pattern in search_keywords:
-        if re.search(pattern, user_input, re.IGNORECASE):
-            return True
-            
-    # 添加更多智能判断逻辑
-    # 如果输入以"查询"、"请问"等词开头，也触发搜索
-    if re.match(r'^(查询|请问|我想了解|我想知道)', user_input.strip(), re.IGNORECASE):
-        return True
-        
-    # 如果输入包含问号且长度较短，可能是一个问题查询
-    if '?' in user_input or '？' in user_input:
-        return True
-        
-    return False
+        # 返回错误信息但仍保持OpenAI格式
+        return jsonify(create_error_response(e))
+
 
 if __name__ == '__main__':
     app.run(debug=True, port=5001, host='0.0.0.0')
