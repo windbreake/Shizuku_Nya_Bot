@@ -6,17 +6,18 @@
 用于诊断搜索API的问题
 """
 
-import sys
-import os
-import requests
 import json
+import os
+import sys
+
+import requests
 
 # 添加项目路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # 导入配置
-import config
-from config import CONFIG
+from .config import CONFIG
+from .shared_utils import should_search
 
 
 def debug_search_api():
@@ -30,6 +31,10 @@ def debug_search_api():
     # 测试查询
     query = "人工智能"
     print(f"\n测试查询: {query}")
+    
+    # 测试是否应该触发搜索
+    should_trigger = should_search(query)
+    print(f"是否应该触发搜索: {should_trigger}")
     
     # 构建请求
     headers = {
@@ -90,7 +95,15 @@ def debug_search_api():
         print(f"请求异常: {e}")
     except Exception as e:
         print(f"其他错误: {e}")
+        # 打印详细的错误信息
+        import traceback
+        traceback.print_exc()
+
+
+def main():
+    """主函数"""
+    debug_search_api()
 
 
 if __name__ == "__main__":
-    debug_search_api()
+    main()
