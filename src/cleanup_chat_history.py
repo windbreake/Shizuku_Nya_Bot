@@ -1,21 +1,25 @@
-# cleanup_chat_history_daemon.py
+"""聊天记录清理守护进程，用于定期清理过期的聊天记录"""
+
+import logging
+import os
+import sys
+import time
+
 import mysql.connector
 from mysql.connector import Error
-import time
-import logging
-import sys
-import os
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from src.config import CONFIG 
-# 配置日志输出
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+
+from src.config import CONFIG
+from src.logging_config import setup_logging
 
 
 def get_connection():
-    """获取数据库连接"""
+    """获取数据库连接
+    
+    Returns:
+        mysql.connector.connection.MySQLConnection: 数据库连接对象，连接失败时返回None
+    """
     try:
         connection = mysql.connector.connect(
             host=CONFIG['database']['host'],
@@ -26,12 +30,19 @@ def get_connection():
         )
         return connection
     except Error as e:
-        logging.error(f"数据库连接失败: {e}")
+        logging.error("数据库连接失败: %s", str(e))
         return None
 
 
 def get_chat_count(connection):
-    """获取聊天记录总数"""
+    """获取聊天记录总数
+    
+    Args:
+        connection (mysql.connector.connection.MySQLConnection): 数据库连接对象
+        
+    Returns:
+        int: 聊天记录总数
+    """
     try:
         cursor = connection.cursor()
         cursor.execute("SELECT COUNT(*) FROM chat_history")
@@ -43,7 +54,12 @@ def get_chat_count(connection):
 
 
 def cleanup_chat_records(connection, cleanup_batch=100):
-    """修改：当记录超过阈值后，删除最早的 cleanup_batch 条数据"""
+    """修改：当记录超过阈值后，删除最早的 cleanup_batch 条数据
+    
+    Args:
+        connection (mysql.connector.connection.MySQLConnection): 数据库连接对象
+        cleanup_batch (int): 要清理的记录数量，默认为100
+    """
     try:
         cursor = connection.cursor()
         # 查询最早的 cleanup_batch 条记录 ID
@@ -63,6 +79,8 @@ def cleanup_chat_records(connection, cleanup_batch=100):
 
 
 def main():
+    """主函数"""
+    setup_logging()
     max_records = 200
     check_interval = 60  # 每隔多少秒检查一次
 
