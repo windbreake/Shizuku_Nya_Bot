@@ -295,90 +295,61 @@ def run_web_server():
     # 后端获取记录
     @app.route('/api/records')
     def api_records():
-        from src.reset_database import get_connection
-        conn = get_connection()
-        rows = []
-        if conn:
-            try:
-                cur = conn.cursor()
-                # 检查表是否存在
-                cur.execute("SHOW TABLES LIKE 'chat_history'")
-                if cur.fetchone():
-                    # 减少默认查询数量，提高响应速度
-                    limit = min(int(request.args.get('limit', 50)), 100)  # 限制最大100条记录
-                    cur.execute("SELECT * FROM chat_history ORDER BY id DESC LIMIT %s",  # 改为降序，优先显示最新记录
-                                (limit,))
-                    rows = cur.fetchall()
-                conn.close()
-            except Exception as e:
-                app.logger.error(f"获取聊天记录时出错: {str(e)}")
-                if conn.is_connected():
-                    conn.close()
-        return jsonify(rows)
+        from src.database import DatabaseManager
+        db_manager = DatabaseManager()
+        try:
+            # 减少默认查询数量，提高响应速度
+            limit = min(int(request.args.get('limit', 50)), 100)  # 限制最大100条记录
+            rows = db_manager.get_chat_history(limit=limit)
+            return jsonify(rows)
+        except Exception as e:
+            app.logger.error(f"获取聊天记录时出错: {str(e)}")
+            return jsonify([]) 
+        finally:
+            db_manager.close()
 
     @app.route('/api/delete_record', methods=['POST'])
     def api_del_record():
         data = request.get_json()
         rid = data.get('id')
-        from src.reset_database import get_connection
-        conn = get_connection()
-        if conn:
-            try:
-                cur = conn.cursor()
-                # 检查表是否存在
-                cur.execute("SHOW TABLES LIKE 'chat_history'")
-                if cur.fetchone():
-                    cur.execute("DELETE FROM chat_history WHERE id=%s", (rid,))
-                    conn.commit()
-                conn.close()
-            except Exception as e:
-                app.logger.error(f"删除聊天记录时出错: {str(e)}")
-                if conn.is_connected():
-                    conn.close()
-        return jsonify({'message': 'ok'})
+        from src.database import DatabaseManager
+        db_manager = DatabaseManager()
+        try:
+            db_manager.delete_chat_record(rid)
+            return jsonify({'message': 'ok'})
+        except Exception as e:
+            app.logger.error(f"删除聊天记录时出错: {str(e)}")
+            return jsonify({'message': 'error'}), 500
+        finally:
+            db_manager.close()
 
     @app.route('/api/clear_records', methods=['POST'])
     def api_clear():
-        from src.reset_database import get_connection
-        conn = get_connection()
-        if conn:
-            try:
-                cur = conn.cursor()
-                # 检查表是否存在
-                cur.execute("SHOW TABLES LIKE 'chat_history'")
-                if cur.fetchone():
-                    cur.execute("DELETE FROM chat_history")
-                    conn.commit()
-                conn.close()
-            except Exception as e:
-                app.logger.error(f"清空聊天记录时出错: {str(e)}")
-                if conn.is_connected():
-                    conn.close()
-        return jsonify({'message': 'cleared'})
+        from src.database import DatabaseManager
+        db_manager = DatabaseManager()
+        try:
+            db_manager.clear_chat_history()
+            return jsonify({'message': 'cleared'})
+        except Exception as e:
+            app.logger.error(f"清空聊天记录时出错: {str(e)}")
+            return jsonify({'message': 'error'}), 500
+        finally:
+            db_manager.close()
 
     @app.route('/api/delete_first_n', methods=['POST'])
     def api_del_n():
         data = request.get_json()
         n = data.get('n', 0)
-        from src.reset_database import get_connection
-        conn = get_connection()
-        if conn:
-            try:
-                cur = conn.cursor()
-                # 检查表是否存在
-                cur.execute("SHOW TABLES LIKE 'chat_history'")
-                if cur.fetchone():
-                    cur.execute("SELECT id FROM chat_history ORDER BY id ASC LIMIT %s", (n,))
-                    ids = [r[0] for r in cur.fetchall()]
-                    if ids:
-                        cur.execute(f"DELETE FROM chat_history WHERE id IN ({','.join(str(i) for i in ids)})")
-                        conn.commit()
-                conn.close()
-            except Exception as e:
-                app.logger.error(f"删除前N条聊天记录时出错: {str(e)}")
-                if conn.is_connected():
-                    conn.close()
-        return jsonify({'message': 'deleted_first_n'})
+        from src.database import DatabaseManager
+        db_manager = DatabaseManager()
+        try:
+            db_manager.delete_first_n_records(n)
+            return jsonify({'message': 'deleted_first_n'})
+        except Exception as e:
+            app.logger.error(f"删除前N条聊天记录时出错: {str(e)}")
+            return jsonify({'message': 'error'}), 500
+        finally:
+            db_manager.close()
 
     # 启动模式
     @app.route('/api/run_mode', methods=['POST'])
@@ -408,7 +379,7 @@ def run_web_server():
                 text=True,
                 encoding='utf-8',
                 cwd=base_path,
-                timeout=30  # 添加30秒超时
+                timeout=60  # 增加超时到60秒
             )
             response_text = f"<pre>{result}</pre>"
             # 添加不使用缓存的头部
@@ -424,6 +395,14 @@ def run_web_server():
             response.headers['Pragma'] = 'no-cache'
             response.headers['Expires'] = '0'
             return response, 500
+        except subprocess.TimeoutExpired as e:
+            timeout_output = e.output.decode('utf-8') if e.output else "诊断执行超时"
+            error_response = f"<pre>诊断执行超时 (超过60秒):\n{timeout_output}</pre>"
+            response = Response(error_response, mimetype='text/html')
+            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = '0'
+            return response, 408
         except Exception as e:
             error_response = f"<pre>未知错误: {str(e)}</pre>"
             response = Response(error_response, mimetype='text/html')
@@ -650,15 +629,34 @@ def run_web_server():
                         # 检查表是否存在
                         cur.execute("SHOW TABLES LIKE 'character_info'")
                         if cur.fetchone():
-                            # 更新或插入角色信息
-                            cur.execute("INSERT INTO character_info (name, personality, brother_qqid, height, weight, catchphrases) VALUES (%s, %s, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE personality = VALUES(personality), brother_qqid = VALUES(brother_qqid), height = VALUES(height), weight = VALUES(weight), catchphrases = VALUES(catchphrases)", (
-                                new_config['character'].get('name', '小雫'),
-                                new_config['character'].get('personality', ''),
-                                new_config['character'].get('brother_qqid', ''),
-                                new_config['character'].get('height', ''),
-                                new_config['character'].get('weight', ''),
-                                new_config['character'].get('catchphrases', '')
-                            ))
+                            # 先检查是否有记录
+                            cur.execute("SELECT COUNT(*) FROM character_info")
+                            count = cur.fetchone()[0]
+                            if count > 0:
+                                # 如果存在记录，则更新第一条记录
+                                cur.execute("""UPDATE character_info 
+                                             SET name = %s, personality = %s, brother_qqid = %s, 
+                                                 height = %s, weight = %s, catchphrases = %s 
+                                             LIMIT 1""", (
+                                    new_config['character'].get('name', 'Default Character'),
+                                    new_config['character'].get('personality', ''),
+                                    new_config['character'].get('brother_qqid', ''),
+                                    new_config['character'].get('height', ''),
+                                    new_config['character'].get('weight', ''),
+                                    new_config['character'].get('catchphrases', '')
+                                ))
+                            else:
+                                # 如果没有记录，则插入新记录
+                                cur.execute("""INSERT INTO character_info 
+                                             (name, personality, brother_qqid, height, weight, catchphrases) 
+                                             VALUES (%s, %s, %s, %s, %s, %s)""", (
+                                    new_config['character'].get('name', 'Default Character'),
+                                    new_config['character'].get('personality', ''),
+                                    new_config['character'].get('brother_qqid', ''),
+                                    new_config['character'].get('height', ''),
+                                    new_config['character'].get('weight', ''),
+                                    new_config['character'].get('catchphrases', '')
+                                ))
                             conn.commit()
                         conn.close()
                 except Exception as e:
@@ -674,7 +672,7 @@ def run_web_server():
             
             # 重新生成系统提示
             CONFIG['system_prompt'] = generate_system_prompt(
-                config_data['character'], 
+                new_config.get('character', config_data['character']), 
                 config_data['system_prompt_template']
             )
             
