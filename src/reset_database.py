@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from src.config import CONFIG
 from src.logging_config import setup_logging
+from src.database import table_exists
 
 
 def get_connection():
@@ -27,7 +28,8 @@ def get_connection():
             user=CONFIG['database']['user'],
             password=CONFIG['database']['password'],
             database=CONFIG['database']['database'],
-            charset='utf8mb4'
+            charset='utf8mb4',
+            collation='utf8mb4_unicode_ci'
         )
         return connection
     except Error as e:
@@ -43,9 +45,7 @@ def reset_chat_history(connection):
     """
     try:
         cursor = connection.cursor()
-        # 检查表是否存在
-        cursor.execute("SHOW TABLES LIKE 'chat_history'")
-        if cursor.fetchone():
+        if table_exists(cursor, 'chat_history'):
             cursor.execute("DELETE FROM chat_history")
             connection.commit()
             logging.info("chat_history 表已清空。")
@@ -64,13 +64,15 @@ def list_records(connection, limit, offset):
     Returns:
         list: 记录列表
     """
-    cursor = connection.cursor()
-    # 检查表是否存在
-    cursor.execute("SHOW TABLES LIKE 'chat_history'")
-    if cursor.fetchone():
-        cursor.execute("SELECT * FROM chat_history ORDER BY id ASC LIMIT %s OFFSET %s", (limit, offset))
-        return cursor.fetchall()
-    return []
+    try:
+        cursor = connection.cursor()
+        if table_exists(cursor, 'chat_history'):
+            cursor.execute("SELECT * FROM chat_history ORDER BY id ASC LIMIT %s OFFSET %s", (limit, offset))
+            return cursor.fetchall()
+        return []
+    except Error as e:
+        logging.error("列出记录失败: %s", e)
+        return []
 
 
 def delete_record(connection, record_id):
@@ -80,25 +82,27 @@ def delete_record(connection, record_id):
         connection (mysql.connector.connection.MySQLConnection): 数据库连接对象
         record_id (int): 要删除的记录ID
     """
-    cursor = connection.cursor()
-    # 检查表是否存在
-    cursor.execute("SHOW TABLES LIKE 'chat_history'")
-    if not cursor.fetchone():
-        print("记录表不存在。")
-        return
-    cursor.execute("SELECT * FROM chat_history WHERE id=%s", (record_id,))
-    rec = cursor.fetchone()
-    if not rec:
-        print("记录不存在。")
-        return
-    print("将删除记录：", rec)
-    confirm = input("确认删除？(y/n): ").strip().lower()
-    if confirm == 'y':
-        cursor.execute("DELETE FROM chat_history WHERE id=%s", (record_id,))
-        connection.commit()
-        print("已删除。")
-    else:
-        print("已取消。")
+    try:
+        cursor = connection.cursor()
+        if not table_exists(cursor, 'chat_history'):
+            print("记录表不存在。")
+            return
+            
+        cursor.execute("SELECT * FROM chat_history WHERE id=%s", (record_id,))
+        rec = cursor.fetchone()
+        if not rec:
+            print("记录不存在。")
+            return
+        print("将删除记录：", rec)
+        confirm = input("确认删除？(y/n): ").strip().lower()
+        if confirm == 'y':
+            cursor.execute("DELETE FROM chat_history WHERE id=%s", (record_id,))
+            connection.commit()
+            print("已删除。")
+        else:
+            print("已取消。")
+    except Error as e:
+        logging.error("删除指定记录失败: %s", e)
 
 
 def paginate_and_manage_records(connection, page_size=200):
@@ -136,32 +140,35 @@ def delete_first_n_records(connection):
     Args:
         connection (mysql.connector.connection.MySQLConnection): 数据库连接对象
     """
-    n = input("请输入要删除的前 N 条记录的数量: ").strip()
-    if not n.isdigit():
-        print("请输入有效数字。")
-        return
-    n = int(n)
-    cursor = connection.cursor()
-    # 检查表是否存在
-    cursor.execute("SHOW TABLES LIKE 'chat_history'")
-    if not cursor.fetchone():
-        print("记录表不存在。")
-        return
-    cursor.execute("SELECT id FROM chat_history ORDER BY id ASC LIMIT %s", (n,))
-    ids = [r[0] for r in cursor.fetchall()]
-    if not ids:
-        print("无可删除的记录。")
-        return
-    print("将删除以下 ID:", ids)
-    confirm = input("确认删除？(y/n): ").strip().lower()
-    if confirm == 'y':
-        # 使用参数化查询避免SQL注入
-        format_strings = ','.join(['%s'] * len(ids))
-        cursor.execute(f"DELETE FROM chat_history WHERE id IN ({format_strings})", tuple(ids))
-        connection.commit()
-        print(f"已删除 {cursor.rowcount} 条记录。")
-    else:
-        print("已取消。")
+    try:
+        n = input("请输入要删除的前 N 条记录的数量: ").strip()
+        if not n.isdigit():
+            print("请输入有效数字。")
+            return
+        n = int(n)
+        cursor = connection.cursor()
+        if not table_exists(cursor, 'chat_history'):
+            print("记录表不存在。")
+            return
+            
+        cursor.execute("SELECT id FROM chat_history ORDER BY id ASC LIMIT %s", (n,))
+        ids = [r[0] for r in cursor.fetchall()]
+        if not ids:
+            print("无可删除的记录。")
+            return
+        print("将删除以下 ID:", ids)
+        confirm = input("确认删除？(y/n): ").strip().lower()
+        if confirm == 'y':
+            # 使用参数化查询避免SQL注入
+            format_strings = ','.join(['%s'] * len(ids))
+            query = f"DELETE FROM chat_history WHERE id IN ({format_strings})"
+            cursor.execute(query, tuple(ids))
+            connection.commit()
+            print(f"已删除 {cursor.rowcount} 条记录。")
+        else:
+            print("已取消。")
+    except Error as e:
+        logging.error("删除前N条记录失败: %s", e)
 
 
 def main():
