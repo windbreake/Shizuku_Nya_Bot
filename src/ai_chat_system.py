@@ -1,29 +1,48 @@
-# ai_chat_system.py
-# AI聊天系统核心逻辑
+# -*- coding: utf-8 -*-
+"""AI聊天系统模块"""
+
+import json
+import logging
+import os
+import time
 import threading
 import base64
-import requests
-from io import BytesIO
-from PIL import Image
-from openai import OpenAI
-import openai  # 导入openai以使用Timeout异常
-import sys
-import os
 import re
+from datetime import datetime
+from typing import Optional, Tuple
+from io import BytesIO
 
-# 添加当前目录到系统路径
-sys.path.append(os.path.abspath(os.path.dirname(__file__)))
+import requests
+from mysql.connector import Error
+from PIL import Image
+from openai import OpenAI, APITimeoutError
 
-# 修复导入问题 - 直接从相对路径导入CONFIG
-from .config import CONFIG
-from .database import DatabaseManager
+from src.config import CONFIG
+from src.database import get_connection, DatabaseManager
+from src.shared_utils import count_tokens, estimate_tokens
+
+# 全局变量用于跟踪Token使用（需要在web_server.py中更新这些值）
+try:
+    from src.web_server import INPUT_TOKENS, OUTPUT_TOKENS
+except ImportError:
+    # 如果无法导入，则使用局部变量
+    INPUT_TOKENS = 0
+    OUTPUT_TOKENS = 0
 
 
 class AIChatSystem:
+    """AI聊天系统类，使用单例模式实现"""
+
     _instance = None
     _lock = threading.Lock()
 
+    def __init__(self):
+        """初始化AI聊天系统"""
+        # 在单例模式下，不要在__init__中初始化属性
+        # 这些属性应该在initialize()方法中初始化
+
     def __new__(cls):
+        """创建单例实例"""
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -32,35 +51,64 @@ class AIChatSystem:
         return cls._instance
 
     def initialize(self):
-        self.db = DatabaseManager()
-        character = CONFIG['character']  # 使用配置文件中的角色设定
-
-        # 提取口癖并处理
-        catchphrases = character['catchphrases'] or '喵'
-        phrases_list = [phrase.strip() for phrase in catchphrases.split(',') if phrase.strip()]
-
-        self.system_prompt = (
-            f"你叫{character['name']}，是一只{character['personality']}。"
-            f"你的哥哥QQ是：{character['brother_qqid']}。"
-            "必须遵守以下规则：\n"
-            f"1. 每句话结尾随机使用以下口癖：{catchphrases}\n"
-            "2. 不使用括号描述动作神态\n"
-            "3. 保持简洁可爱（回复不超过100字）\n\n"
-            "示例对话：\n"
-            "用户: 在干嘛？\n"
-            f"你: 等哥哥消息呢{phrases_list[0] if phrases_list else '喵~'}\n"
-            "用户: 喜欢哥哥吗？\n"
-            f"你: 才...才不喜欢呢{phrases_list[1] if len(phrases_list) > 1 else '哒！'}"
-        )
+        """初始化聊天系统属性"""
+        db = DatabaseManager()
+        # 直接从配置中获取系统提示语，不再在代码中生成
+        system_prompt = CONFIG['system_prompt']
 
         # 使用配置中的基础URL
-        self.client = OpenAI(
+        client = OpenAI(
             api_key=CONFIG['api']['key'],
-            base_url=CONFIG['api']['base_url']
+            base_url=CONFIG['api']['base_url'],
+            timeout=30.0  # 添加超时设置
         )
-        self.messages = [{"role": "system", "content": self.system_prompt}]
+        messages = [{"role": "system", "content": system_prompt}]
 
-    def compress_image(self, base64_data):
+        # 确保赋值成功
+        self.db = db
+        self.system_prompt = system_prompt
+        self.client = client
+        self.messages = messages
+
+    @staticmethod
+    def _build_headers(api_key):
+        """构建通用的请求头"""
+        return {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+
+    @staticmethod
+    def _build_chat_messages(system_content, user_content):
+        """构建聊天消息结构"""
+        return [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": user_content}
+        ]
+
+    @staticmethod
+    def _match_patterns(patterns, text, flags=0):
+        """匹配多个正则表达式模式"""
+        for pattern in patterns:
+            if re.search(pattern, text, flags):
+                return True
+        return False
+
+    @staticmethod
+    def _make_api_request(url, headers, payload):
+        """发送API请求的通用方法"""
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        return response
+
+    @staticmethod
+    def _handle_tool_call(tool_call):
+        """处理工具调用"""
+        tool_call_id = tool_call["id"]
+        tool_call_arguments = json.loads(tool_call["function"]["arguments"])
+        return tool_call_id, tool_call_arguments
+
+    @staticmethod
+    def compress_image(base64_data):
         """压缩图片以减少大小"""
         try:
             # 提取纯base64数据
@@ -89,7 +137,8 @@ class AIChatSystem:
             print(f"图片压缩错误: {e}")
             return base64_data.split(',')[-1] if ',' in base64_data else base64_data
 
-    def analyze_image_with_aliyun(self, image_data):
+    @staticmethod
+    def analyze_image_with_aliyun(image_data):
         """使用阿里云通义VL MAX分析图片"""
         try:
             # 提取纯base64数据
@@ -99,10 +148,7 @@ class AIChatSystem:
                 base64_data = image_data
 
             # 构建请求头
-            headers = {
-                "Authorization": f"Bearer {CONFIG['aliyun_api']['key']}",
-                "Content-Type": "application/json"
-            }
+            headers = AIChatSystem._build_headers(CONFIG['aliyun_api']['key'])
 
             # 构建请求体
             payload = {
@@ -128,10 +174,10 @@ class AIChatSystem:
             }
 
             # 发送请求到阿里云通义VL MAX API
-            response = requests.post(
+            response = AIChatSystem._make_api_request(
                 f"{CONFIG['aliyun_api']['base_url']}/services/aigc/multimodal-generation/generation",
-                headers=headers,
-                json=payload
+                headers,
+                payload
             )
 
             if response.status_code != 200:
@@ -161,111 +207,168 @@ class AIChatSystem:
             print(f"Image Analysis Error: {error_msg}")
             return error_msg
 
-    def analyze_image_from_url(self, image_url):
+    @staticmethod
+    def analyze_image_from_url(image_url):
         """通过URL获取图片并使用阿里云通义VL MAX分析图片"""
         try:
             # 从URL获取图片
             response = requests.get(image_url, timeout=30)
             response.raise_for_status()
-            
+
             # 将图片转换为Base64
             image_data = base64.b64encode(response.content).decode('utf-8')
-            
+
             # 使用现有的方法分析图片
-            return self.analyze_image_with_aliyun(image_data)
-            
+            return AIChatSystem.analyze_image_with_aliyun(image_data)
+
         except Exception as e:
             error_msg = f"从URL获取图片失败: {str(e)}"
             print(f"Image URL Error: {error_msg}")
             return error_msg
 
-    def search_with_ai_search(self, query):
-        """使用AI Search API进行搜索"""
+    @staticmethod
+    def search_with_ai_search(query):
+        """使用Kimi API进行搜索"""
         try:
-            headers = {
-                "Authorization": f"Bearer {CONFIG['search_api']['key']}",
-                "Content-Type": "application/json"
-            }
-            
-            payload = {
-                "query": query,
-                "count": 10
-            }
-            
-            response = requests.post(
-                CONFIG['search_api']['base_url'],
-                headers=headers,
-                json=payload
+            headers = AIChatSystem._build_headers(CONFIG['search_api']['key'])
+
+            # 构造Kimi API请求消息
+            kimi_messages = AIChatSystem._build_chat_messages(
+                "你是 Kimi，由 Moonshot AI 提供支持的人工智能助手。",
+                query
             )
-            
+
+            # 发送请求到Kimi API
+            kimi_payload = {
+                "model": "kimi-k2-0905-preview",
+                "messages": kimi_messages,
+                "temperature": 0.6,
+                "max_tokens": 32768,
+                "tools": [
+                    {
+                        "type": "builtin_function",
+                        "function": {
+                            "name": "$web_search",
+                        },
+                    }
+                ]
+            }
+
+            response = AIChatSystem._make_api_request(
+                f"{CONFIG['search_api']['base_url']}/chat/completions",
+                headers,
+                kimi_payload
+            )
+
             if response.status_code != 200:
                 error_msg = f"搜索API错误: {response.status_code} - {response.text}"
                 print(f"Search API Error: {error_msg}")
                 return error_msg
-            
+
             result = response.json()
-            # 修复数据结构解析问题：使用webPages而不是web_pages
-            if "data" in result and "webPages" in result["data"] and "value" in result["data"]["webPages"]:
-                search_results = result["data"]["webPages"]["value"][:10]  # 只取前10个结果
-                formatted_results = []
-                for item in search_results:
-                    # 使用与test_webapi.py相同的字段名，但注意API实际返回的字段名
-                    name = item.get("name", "")
-                    snippet = item.get("snippet", "")
-                    url = item.get("url", "")
-                    # 格式化搜索结果，便于AI理解
-                    formatted_results.append({
-                        "title": name,
-                        "url": url,
-                        "snippet": snippet
-                    })
-                
-                # 将搜索结果转换为文本格式
-                result_text = "搜索结果:\n"
-                for i, item in enumerate(formatted_results, 1):
-                    result_text += f"{i}. {item['title']}\n   {item['snippet']}\n   URL: {item['url']}\n\n"
-                return result_text
-            else:
-                return "未找到相关搜索结果"
-                
+            # 检查是否需要工具调用
+            if result.get("choices") and len(result["choices"]) > 0:
+                choice = result["choices"][0]
+                if choice.get("finish_reason") == "tool_calls" and \
+                        choice.get("message") and choice["message"].get("tool_calls"):
+                    # 处理工具调用
+                    tool_calls = choice["message"]["tool_calls"]
+                    for tool_call in tool_calls:
+                        if tool_call["function"]["name"] == "$web_search":
+                            # 执行搜索工具调用
+                            tool_call_id, tool_call_arguments = AIChatSystem._handle_tool_call(tool_call)
+
+                            # 将工具调用结果返回给Kimi API
+                            kimi_messages.append(choice["message"])
+                            kimi_messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call_id,
+                                "name": "$web_search",
+                                "content": json.dumps(tool_call_arguments)
+                            })
+
+                            # 再次调用Kimi API获取最终结果
+                            kimi_payload["messages"] = kimi_messages
+                            final_response = AIChatSystem._make_api_request(
+                                f"{CONFIG['search_api']['base_url']}/chat/completions",
+                                headers,
+                                kimi_payload
+                            )
+
+                            if final_response.status_code == 200:
+                                final_result = final_response.json()
+                                if final_result.get("choices") and len(final_result["choices"]) > 0:
+                                    final_choice = final_result["choices"][0]
+                                    if final_choice.get("message") and final_choice["message"].get("content"):
+                                        return final_choice["message"]["content"]
+
+            return "未找到相关搜索结果"
+
         except Exception as e:
             error_msg = f"搜索失败: {str(e)}"
             print(f"Search Error: {error_msg}")
             return error_msg
 
-    def should_search(self, user_input):
+    @staticmethod
+    def should_search(user_input):
         """判断是否需要进行搜索"""
-        if not user_input:
-            return False
-            
-        # 定义触发搜索的关键词模式
-        search_keywords = [
-            r'(?:(?:搜索|查|找|了解|知道|什么是|是什么|怎么样|如何|怎么|哪里|哪儿|哪个|哪些|谁是|谁的|几点|时间|日期|天气|新闻|最新|最近|现在).*)',
-            r'(.*(?:天气|新闻|股价|比分|时间|日期|定义|解释|介绍|攻略|评测|比较|区别|方法|步骤|教程|怎么做).*)',
-            r'(.*(?:最新|最近|现在|今天|明天|昨天|今年|去年|这个月|下个月|上个月).*)'
-        ]
+        from src.shared_utils import should_search as util_should_search
+        return util_should_search(user_input)
+
+    def _send_deepseek_request(self, messages: list) -> Tuple[str, int, int]:
+        """发送请求到DeepSeek API
         
-        # 检查用户输入是否包含触发搜索的关键词
-        for pattern in search_keywords:
-            if re.search(pattern, user_input, re.IGNORECASE):
-                return True
-                
-        # 添加更多智能判断逻辑
-        # 如果输入以"查询"、"请问"等词开头，也触发搜索
-        if re.match(r'^(查询|请问|我想了解|我想知道)', user_input.strip(), re.IGNORECASE):
-            return True
+        Args:
+            messages (list): 消息历史列表
             
-        # 如果输入包含问号且长度较短，可能是一个问题查询
-        if '?' in user_input or '？' in user_input:
-            return True
-            
-        return False
+        Returns:
+            tuple: (回复内容, 输入token数, 输出token数)
+        """
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {CONFIG['api']['key']}"
+        }
+
+        # 构造请求数据
+        data = {
+            "model": "deepseek-chat",
+            "messages": messages,
+            "stream": False
+        }
+
+        # 发送请求
+        response = requests.post(
+            f"{CONFIG['api']['base_url']}/chat/completions",
+            headers=headers,
+            json=data,
+            timeout=300
+        )
+        response.raise_for_status()
+
+        # 解析响应
+        result = response.json()
+        content = result['choices'][0]['message']['content']
+        
+        # 获取token统计
+        prompt_tokens = result.get('usage', {}).get('prompt_tokens', 0)
+        completion_tokens = result.get('usage', {}).get('completion_tokens', 0)
+        
+        # 更新全局token计数
+        global INPUT_TOKENS, OUTPUT_TOKENS
+        try:
+            from src.web_server import INPUT_TOKENS, OUTPUT_TOKENS
+            INPUT_TOKENS += prompt_tokens
+            OUTPUT_TOKENS += completion_tokens
+        except ImportError:
+            INPUT_TOKENS += prompt_tokens
+            OUTPUT_TOKENS += completion_tokens
+
+        return content, prompt_tokens, completion_tokens
 
     def chat(self, user_input, image=None):
         """处理聊天请求，支持文本和图片"""
         image_description = None
-        search_result = None
-        
+
         # 处理图片
         if image:
             # 使用阿里云通义VL MAX分析图片
@@ -279,16 +382,22 @@ class AIChatSystem:
         # 处理文本输入
         if user_input:
             # 判断是否需要搜索
-            if self.should_search(user_input):
+            if AIChatSystem.should_search(user_input):
                 print(f"检测到搜索请求: {user_input}")
-                search_result = self.search_with_ai_search(user_input)
-                # 将搜索结果添加到消息历史中
-                search_context = f"用户问题: {user_input}\n{search_result}"
-                self.messages.append({
-                    "role": "user", 
-                    "content": search_context
-                })
-                print(f"搜索结果: {search_result[:100]}...")
+                search_result = AIChatSystem.search_with_ai_search(user_input)
+
+                # 检查搜索是否成功
+                if "搜索API错误" in search_result or "搜索失败" in search_result:
+                    # 如果搜索失败，使用普通聊天模式
+                    self.messages.append({"role": "user", "content": user_input})
+                else:
+                    # 将搜索结果添加到消息历史中
+                    search_context = f"用户问题: {user_input}\n{search_result}"
+                    self.messages.append({
+                        "role": "user",
+                        "content": search_context
+                    })
+                    print(f"搜索结果: {search_result[:100]}...")
             else:
                 self.messages.append({"role": "user", "content": user_input})
         # 如果没有文本输入但有图片
@@ -316,7 +425,7 @@ class AIChatSystem:
 
             return ai_response
 
-        except openai.APITimeoutError:
+        except APITimeoutError:
             return "呜...思考太久超时啦Nanaoda! (>_<)"
         except Exception as e:
             return f"呜...出错啦Nanaoda! ({str(e)})"
